@@ -19,6 +19,16 @@ pipeline {
         sh 'cd java-maven-sonar-argocd-helm-k8s/spring-boot-app && mvn clean package'
       }
     }
+
+    stage('Dependency-Check') {
+      steps {
+        sh '''
+          cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
+          mvn org.owasp:dependency-check-maven:check
+        '''
+      }
+    }
+
     stage('Static Code Analysis') {
       environment {
         SONAR_URL = "http://15.228.205.225:9000"
@@ -29,45 +39,53 @@ pipeline {
         }
       }
     }
-stage('Build and Push Docker Image') {
-    environment {
+
+    stage('Build and Push Docker Image') {
+      environment {
         DOCKER_IMAGE = "marlonceub/ultimate-cicd:${BUILD_NUMBER}"
-    }
-    steps {
+      }
+      steps {
         script {
-            sh 'cd java-maven-sonar-argocd-helm-k8s/spring-boot-app && docker build -t ${DOCKER_IMAGE} .'
+          sh 'cd java-maven-sonar-argocd-helm-k8s/spring-boot-app && docker build -t ${DOCKER_IMAGE} .'
 
-            // Recupera o token do Jenkins Credentials
-            withCredentials([string(credentialsId: 'DockerJenkinsToken', variable: 'DOCKER_TOKEN')]) {
-                sh 'echo "$DOCKER_TOKEN" | docker login -u "marlonceub" --password-stdin'
+          // Recupera o token do Jenkins Credentials
+          withCredentials([string(credentialsId: 'DockerJenkinsToken', variable: 'DOCKER_TOKEN')]) {
+            sh 'echo "$DOCKER_TOKEN" | docker login -u "marlonceub" --password-stdin'
 
-                def dockerImage = docker.image("${DOCKER_IMAGE}")
-                dockerImage.push()
+            def dockerImage = docker.image("${DOCKER_IMAGE}")
+            dockerImage.push()
 
-                // Faz logout para evitar exposição do token no ambiente
-                sh 'docker logout'
-            }
+            // Faz logout para evitar exposição do token no ambiente
+            sh 'docker logout'
+          }
         }
+      }
     }
-}
-stage('Update Deployment File') {
-        environment {
-            GIT_REPO_NAME = "repo-ex1-devsecops"
-            GIT_USER_NAME = "marlonceub"
+
+    stage('Update Deployment File') {
+      environment {
+        GIT_REPO_NAME = "repo-ex1-devsecops"
+        GIT_USER_NAME = "marlonceub"
+      }
+      steps {
+        withCredentials([string(credentialsId: 'GithubJenkinsToken', variable: 'GITHUB_TOKEN')]) {
+          sh '''
+            git config user.email "marlonmoretti@sempreceub.com"
+            git config user.name "marlonceub"
+            BUILD_NUMBER=${BUILD_NUMBER}
+            sed -i -e "s/ultimate-cicd.*/ultimate-cicd:${BUILD_NUMBER}/g"  java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
+            git add java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
+            git commit -m "Update deployment image to version ${BUILD_NUMBER}"
+            git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} HEAD:main
+          '''
         }
-        steps {
-            withCredentials([string(credentialsId: 'GithubJenkinsToken', variable: 'GITHUB_TOKEN')]) {
-                sh '''
-                    git config user.email "marlonmoretti@sempreceub.com"
-                    git config user.name "marlonceub"
-                    BUILD_NUMBER=${BUILD_NUMBER}
-                    sed -i -e "s/ultimate-cicd.*/ultimate-cicd:${BUILD_NUMBER}/g"  java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
-                    git add java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
-                    git commit -m "Update deployment image to version ${BUILD_NUMBER}"
-                    git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} HEAD:main
-                '''
-            }
-        }
+      }
+    }
+  }
+
+  post {
+    always {
+      archiveArtifacts artifacts: 'java-maven-sonar-argocd-helm-k8s/spring-boot-app/target/dependency-check-report.html', fingerprint: true
     }
   }
 }
